@@ -148,6 +148,18 @@ func (b *Browser) Process() *os.Process {
 	return b.process
 }
 
+// Disconnect synchronously closes the browser's transport and returns its
+// error. It does not send Browser.close or Target.closeTarget, or itself
+// terminate Chrome. Closing the transport interrupts pending network reads and
+// writes; it does not wait for Browser's goroutines to exit.
+//
+// Normal LostConnection and allocator cleanup still apply. In particular, an
+// ExecAllocator may terminate the Chrome process it owns when the connection is
+// lost.
+func (b *Browser) Disconnect() error {
+	return b.conn.Close()
+}
+
 func (b *Browser) newExecutorForTarget(ctx context.Context, targetID target.ID, sessionID target.SessionID) (*Target, error) {
 	if targetID == "" {
 		return nil, errors.New("empty target ID")
