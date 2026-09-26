@@ -34,6 +34,8 @@ type Target struct {
 	execContexts map[cdp.FrameID]runtime.ExecutionContextID
 	// cur is the current top level frame.
 	cur cdp.FrameID
+	// documentMu serializes refreshes while frame locks are released for I/O.
+	documentMu sync.Mutex
 
 	// logging funcs
 	logf, errf func(string, ...any)
@@ -255,6 +257,8 @@ func (t *Target) runtimeEvent(ev any) {
 // documentUpdated handles the document updated event, retrieving the document
 // root for the root frame.
 func (t *Target) documentUpdated(ctx context.Context) {
+	t.documentMu.Lock()
+	defer t.documentMu.Unlock()
 	t.frameMu.RLock()
 	f := t.frames[t.cur]
 	t.frameMu.RUnlock()
@@ -265,16 +269,18 @@ func (t *Target) documentUpdated(ctx context.Context) {
 		return
 	}
 	f.Lock()
-	defer f.Unlock()
 
 	// invalidate nodes
 	if f.Root != nil {
 		close(f.Root.Invalidated)
 	}
 
+	f.Root = nil
 	f.Nodes = make(map[cdp.NodeID]*cdp.Node)
-	var err error
-	f.Root, err = dom.GetDocument().Do(cdp.WithExecutor(ctx, t))
+	f.Unlock()
+
+	// DOM events must keep draining while their queue precedes this response.
+	root, err := dom.GetDocument().Do(cdp.WithExecutor(ctx, t))
 	if err == context.Canceled {
 		return // TODO: perhaps not necessary, but useful to keep the tests less noisy
 	}
@@ -282,6 +288,9 @@ func (t *Target) documentUpdated(ctx context.Context) {
 		t.errf("could not retrieve document root for %s: %v", f.ID, err)
 		return
 	}
+	f.Lock()
+	defer f.Unlock()
+	f.Root = root
 	f.Root.Invalidated = make(chan struct{})
 	walk(f.Nodes, f.Root)
 }
@@ -360,18 +369,24 @@ func (t *Target) pageEvent(ev any) {
 
 // domEvent handles incoming DOM events.
 func (t *Target) domEvent(ctx context.Context, ev any) {
+	if _, ok := ev.(*dom.EventDocumentUpdated); ok {
+		t.documentUpdated(ctx)
+		return
+	}
 	t.frameMu.RLock()
 	f := t.frames[t.cur]
 	t.frameMu.RUnlock()
+	if f == nil {
+		return
+	}
+	// Initial document loading can rebuild the map while DOM events arrive.
+	f.Lock()
+	defer f.Unlock()
 
 	var id cdp.NodeID
 	var op nodeOp
 
 	switch e := ev.(type) {
-	case *dom.EventDocumentUpdated:
-		t.documentUpdated(ctx)
-		return
-
 	case *dom.EventSetChildNodes:
 		id, op = e.ParentID, setChildNodes(f.Nodes, e.Nodes)
 
@@ -429,7 +444,5 @@ func (t *Target) domEvent(ctx context.Context, ev any) {
 		return
 	}
 
-	f.Lock()
 	op(n)
-	f.Unlock()
 }

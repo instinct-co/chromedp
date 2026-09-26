@@ -70,29 +70,42 @@ func (c *Conn) Close() error {
 }
 
 // Read reads the next message.
+//
+// WebSocket ping frames received from the peer are consumed transparently and
+// the read loop advances to the next frame. Without consuming the ping body
+// before returning, the underlying TCP buffer is left at an offset where the
+// next NextFrame() call would parse garbage, which silently drops the CDP
+// connection. Observed empirically against CDP proxies (e.g., Kernel) that
+// emit application-layer ping frames at fixed intervals.
 func (c *Conn) Read(_ context.Context, msg *cdproto.Message) error {
-	// get websocket reader
-	c.reader = wsutil.Reader{Source: c.conn, State: ws.StateClientSide}
-	h, err := c.reader.NextFrame()
-	if err != nil {
-		return err
-	}
-
-	if h.OpCode == ws.OpPing { // ping
-		if c.debugf != nil {
-			c.debugf("received ping frame, ignoring...")
+	for {
+		c.reader = wsutil.Reader{Source: c.conn, State: ws.StateClientSide}
+		h, err := c.reader.NextFrame()
+		if err != nil {
+			return err
 		}
-		return nil
-	} else if h.OpCode == ws.OpClose { // close
-		if c.debugf != nil {
-			c.debugf("received close frame")
+		if h.OpCode == ws.OpPing {
+			if c.debugf != nil {
+				c.debugf("received ping frame, consuming and continuing")
+			}
+			if _, err := io.Copy(io.Discard, &c.reader); err != nil {
+				return err
+			}
+			continue
 		}
-		return io.EOF
-	} else if h.OpCode != ws.OpText {
-		if c.debugf != nil {
-			c.debugf("unknown OpCode: %s", h.OpCode)
+		if h.OpCode == ws.OpClose {
+			if c.debugf != nil {
+				c.debugf("received close frame")
+			}
+			return io.EOF
 		}
-		return ErrInvalidWebsocketMessage
+		if h.OpCode != ws.OpText {
+			if c.debugf != nil {
+				c.debugf("unknown OpCode: %s", h.OpCode)
+			}
+			return ErrInvalidWebsocketMessage
+		}
+		break
 	}
 
 	var b bytes.Buffer
