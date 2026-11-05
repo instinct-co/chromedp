@@ -41,8 +41,14 @@ type Conn struct {
 
 // DialContext dials the specified websocket URL using gobwas/ws.
 func DialContext(ctx context.Context, urlstr string, opts ...DialOption) (*Conn, error) {
+	return dialContextWith(ctx, ws.DefaultDialer, urlstr, opts...)
+}
+
+// dialContextWith dials with an explicit gobwas/ws Dialer (TLS config, net
+// dialer), as set by WithWSDialer.
+func dialContextWith(ctx context.Context, dialer ws.Dialer, urlstr string, opts ...DialOption) (*Conn, error) {
 	// connect
-	conn, br, _, err := ws.Dial(ctx, urlstr)
+	conn, br, _, err := dialer.Dial(ctx, urlstr)
 	if err != nil {
 		return nil, err
 	}

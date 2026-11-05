@@ -17,6 +17,7 @@ import (
 	"github.com/chromedp/cdproto/target"
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
+	"github.com/gobwas/ws"
 )
 
 var (
@@ -54,6 +55,9 @@ type Browser struct {
 	closingGracefully chan struct{}
 
 	dialTimeout time.Duration
+
+	// wsDialer, when set, dials the browser's websocket (WithWSDialer).
+	wsDialer *ws.Dialer
 
 	// pages keeps track of the attached targets, indexed by each's session
 	// ID. The only reason this is a field is so that the tests can check the
@@ -122,7 +126,11 @@ func NewBrowser(ctx context.Context, urlstr string, opts ...BrowserOption) (*Bro
 	}
 
 	var err error
-	b.conn, err = DialContext(dialCtx, urlstr, WithConnDebugf(b.dbgf))
+	if b.wsDialer != nil {
+		b.conn, err = dialContextWith(dialCtx, *b.wsDialer, urlstr, WithConnDebugf(b.dbgf))
+	} else {
+		b.conn, err = DialContext(dialCtx, urlstr, WithConnDebugf(b.dbgf))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("could not dial %q: %w", urlstr, err)
 	}
@@ -373,4 +381,11 @@ func WithConsolef(f func(string, ...any)) BrowserOption {
 // to not use a timeout.
 func WithDialTimeout(d time.Duration) BrowserOption {
 	return func(b *Browser) { b.dialTimeout = d }
+}
+
+// WithWSDialer dials the browser's websocket with the given gobwas/ws Dialer
+// instead of ws.DefaultDialer: for example a TLS config that pins the remote
+// browser's certificate (a private host behind wss://).
+func WithWSDialer(d ws.Dialer) BrowserOption {
+	return func(b *Browser) { b.wsDialer = &d }
 }
