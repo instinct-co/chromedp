@@ -80,6 +80,22 @@ func TestKeepTargetOpenConcurrentWithCancel(t *testing.T) {
 func TestKeepTargetOpenIgnoresOtherContexts(t *testing.T) {
 	t.Parallel()
 	KeepTargetOpen(context.Background()) // must not panic
+	if TargetKeptOpen(context.Background()) {
+		t.Fatal("a plain context reports kept open")
+	}
+}
+
+func TestTargetKeptOpen(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := NewContext(browserCtxForTest(t))
+	defer cancel()
+	if TargetKeptOpen(ctx) {
+		t.Fatal("a fresh context reports kept open")
+	}
+	KeepTargetOpen(ctx)
+	if !TargetKeptOpen(ctx) {
+		t.Fatal("KeepTargetOpen was not recorded")
+	}
 }
 
 func browserCtxForTest(t *testing.T) context.Context {

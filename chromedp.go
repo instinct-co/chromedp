@@ -250,6 +250,20 @@ func KeepTargetOpen(ctx context.Context) {
 	c.keepOpenMu.Unlock()
 }
 
+// TargetKeptOpen reports whether KeepTargetOpen has been called on ctx. A
+// caller that marks a context this way before abandoning it can use this to
+// tell, from another goroutine, that the context is no longer in use. It is
+// false for a context that is not a chromedp context.
+func TargetKeptOpen(ctx context.Context) bool {
+	c := FromContext(ctx)
+	if c == nil {
+		return false
+	}
+	c.keepOpenMu.Lock()
+	defer c.keepOpenMu.Unlock()
+	return c.keepOpen
+}
+
 type contextKey struct{}
 
 // FromContext extracts the Context data stored inside a context.Context.
