@@ -94,6 +94,11 @@ type Context struct {
 	// cancellation.
 	closedTarget sync.WaitGroup
 
+	// keepOpenMu guards keepOpen, which KeepTargetOpen sets and the
+	// cancellation goroutine reads.
+	keepOpenMu sync.Mutex
+	keepOpen   bool
+
 	// allocated is closed when an allocated browser completely stops. If no
 	// browser needs to be allocated, the channel is simply not initialized
 	// and remains nil.
@@ -179,7 +184,17 @@ func NewContext(parent context.Context, opts ...ContextOption) (context.Context,
 			return
 		}
 
-		if c.Target == nil {
+		c.keepOpenMu.Lock()
+		keepOpen := c.keepOpen
+		c.keepOpenMu.Unlock()
+		if keepOpen {
+			// The caller asked for the page to outlive this context.
+			return
+		}
+
+		// Read Target once: the steps below must all see the same value.
+		t := c.Target
+		if t == nil {
 			// This is a new tab, but we didn't create it and attach
 			// to it yet. Nothing to do.
 			return
@@ -190,13 +205,13 @@ func NewContext(parent context.Context, opts ...ContextOption) (context.Context,
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		browserExecutor := cdp.WithExecutor(ctx, c.Browser)
-		if id := c.Target.SessionID; id != "" {
+		if id := t.SessionID; id != "" {
 			action := target.DetachFromTarget().WithSessionID(id)
 			if err := action.Do(browserExecutor); c.cancelErr == nil && err != nil {
 				c.cancelErr = err
 			}
 		}
-		if id := c.Target.TargetID; id != "" {
+		if id := t.TargetID; id != "" {
 			action := target.CloseTarget(id)
 			if err := action.Do(browserExecutor); c.cancelErr == nil && err != nil {
 				c.cancelErr = err
@@ -218,6 +233,21 @@ func NewContext(parent context.Context, opts ...ContextOption) (context.Context,
 		}
 	}
 	return ctx, cancelWait
+}
+
+// KeepTargetOpen makes cancelling ctx leave its page open: the context's
+// cancellation neither detaches from nor closes its target. It is safe to call
+// from any goroutine, including while ctx is being cancelled; a call that
+// loses that race has no effect, and the page is closed as usual. It is a
+// no-op for a context that is not a chromedp context.
+func KeepTargetOpen(ctx context.Context) {
+	c := FromContext(ctx)
+	if c == nil {
+		return
+	}
+	c.keepOpenMu.Lock()
+	c.keepOpen = true
+	c.keepOpenMu.Unlock()
 }
 
 type contextKey struct{}
